@@ -299,6 +299,8 @@ struct ScreenConfig
   int menuStyle = 1;      ///< Menu style (0=outlined, 1=filled)
   int scrollbarStyle = 1; ///< Scrollbar style variant
   int textShift = -4;     ///< Vertical text offset for better centering
+  uint8_t menuScale = 1;  ///< Scale for larger displays: menu icons (16 x menuScale px), selection corners, scrollbar width
+  uint8_t menuIconSize = 16; ///< Pixel size of the menu icon bitmaps (square)
 
   // Layout proportions (as ratios of screen dimensions)
   const float itemHeightRatio = 0.30f;         ///< Selection rectangle height ratio
@@ -346,6 +348,7 @@ public:
     uint8_t rangeValue;  ///< Value for RANGE type
     uint8_t optionIndex; ///< Selected index for OPTION type
   };
+  uint8_t defaultValue = 0; ///< Value it was added with (1/0 for BOOLEAN); restored by resetSettings()
 
   // Range-specific configuration
   struct
@@ -452,7 +455,7 @@ public:
   // Setting management methods
   void modify(int8_t direction, int index);
   void modify(int8_t direction, const char *name);
-  Setting::Type getSettingType(uint8_t index);
+  Setting::Type getSettingType(int index);
   String getSettingName(int index);
   uint8_t getSettingValue(int index);
   uint8_t getSettingValue(const char *name);
@@ -529,6 +532,7 @@ struct MenuItem
   Screen *nextScreen;    // Screen to navigate to when selected
   ActionCallback action; // Action to perform when selected
   const uint16_t *image; // Image associated with this menu item
+  const uint8_t *alpha;  // Optional per-pixel alpha (0-255) for the image, nullptr = black is transparent
 };
 
 /**
@@ -547,8 +551,8 @@ public:
   }
 
   // Public methods
-  void addItem(const char *label, Screen *nextScreen = nullptr, ActionCallback action = nullptr, const uint16_t *image = nullptr);
-  void addItem(Screen *nextScreen, ActionCallback action = nullptr, const uint16_t *image = nullptr);
+  void addItem(const char *label, Screen *nextScreen = nullptr, ActionCallback action = nullptr, const uint16_t *image = nullptr, const uint8_t *alpha = nullptr);
+  void addItem(Screen *nextScreen, ActionCallback action = nullptr, const uint16_t *image = nullptr, const uint8_t *alpha = nullptr);
   void draw() override;
   void handleInput() override;
   int getIndex();
@@ -753,6 +757,13 @@ public:
   void setScrollbar(bool x);
   void setScrollbarColor(uint16_t color);
   void setScrollbarStyle(int style);
+  // Scale for larger displays (1 = default, e.g. 2 on a 320x172 panel): draws the 16x16
+  // menu icons at 16 x scale px, and scales the selection corner radius and scrollbar width.
+  // Fonts aren't scaled: give a larger display its own with setMenuFont()/setMenuFontBold().
+  void setMenuScale(uint8_t scale);
+  // Size of the menu icon bitmaps (16 = default). Icons are drawn at 16 x menu scale px:
+  // with setMenuScale(2), 32x32 icons are drawn as they are, 16x16 ones are doubled.
+  void setMenuIconSize(uint8_t size);
   void setSelectionBorderColor(uint16_t color);
   void setSelectionFillColor(uint16_t color);
   void setAnimation(bool enabled);
