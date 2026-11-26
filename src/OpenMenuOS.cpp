@@ -15,6 +15,7 @@
 #include "Arduino.h"
 #include <TFT_eSPI.h>
 #include "OpenMenuOS.h"
+#include "OpenMenuOS_images.h" // Popup icons
 #include <string>
 
 //-------------------------------------------------------------------------
@@ -28,6 +29,77 @@ const GFXfont *menuFontBold = &FreeMonoBold9pt7b; ///< Bold font for selected it
 // Display and canvas instances
 TFT_eSPI tft = TFT_eSPI();              ///< Main TFT display instance
 TFT_eSprite canvas = TFT_eSprite(&tft); ///< Off-screen canvas for smooth rendering
+
+/**
+ * @brief Shortens text so it fits in maxWidth (current canvas font), ending it with "..."
+ */
+static String ellipsize(const String &text, uint16_t maxWidth)
+{
+  if (canvas.textWidth(text) <= maxWidth)
+  {
+    return text;
+  }
+  String shortened = text;
+  while (shortened.length() > 0 && canvas.textWidth(shortened + "...") > maxWidth)
+  {
+    shortened.remove(shortened.length() - 1);
+  }
+  shortened.trim();
+  return shortened + "...";
+}
+
+/**
+ * @brief Draw a menu icon on the canvas
+ * With an alpha map, each pixel is blended with what is already on the canvas
+ * (smooth anti-aliased edges on any background). Without one, black is transparent.
+ * `size` is the icon's own size in pixels; `scale` draws each pixel as a scale x scale
+ * block (nearest neighbour, so pixel-art icons stay crisp).
+ */
+static void pushMenuIcon(int32_t x, int32_t y, int32_t size, const uint16_t *data, const uint8_t *alpha, int32_t scale = 1)
+{
+  if (scale < 1)
+  {
+    scale = 1;
+  }
+  for (int32_t j = 0; j < size; j++)
+  {
+    for (int32_t i = 0; i < size; i++)
+    {
+      int32_t index = j * size + i;
+      // Read byte by byte: icon arrays are usually uint8_t data that may not be 16-bit aligned
+      const uint8_t *bytes = (const uint8_t *)data;
+      uint16_t color = bytes[2 * index] | (bytes[2 * index + 1] << 8);
+      int32_t px = x + i * scale;
+      int32_t py = y + j * scale;
+      if (alpha == nullptr)
+      {
+        if (color != TFT_BLACK)
+        {
+          canvas.fillRect(px, py, scale, scale, color);
+        }
+        continue;
+      }
+
+      uint8_t a = alpha[index];
+      if (a == 0)
+      {
+        continue;
+      }
+      if (a == 255)
+      {
+        canvas.fillRect(px, py, scale, scale, color);
+        continue;
+      }
+      for (int32_t dy = 0; dy < scale; dy++)
+      {
+        for (int32_t dx = 0; dx < scale; dx++)
+        {
+          canvas.drawPixel(px + dx, py + dy, canvas.alphaBlend(a, color, canvas.readPixel(px + dx, py + dy)));
+        }
+      }
+    }
+  }
+}
 
 // Screen management
 ScreenManager screenManager;               ///< Handles screen navigation
@@ -287,12 +359,13 @@ void Screen::drawSelectionRect()
 
   // Clear areas to remove previous text by drawing rounded rectangles
   float clearMargin = tftHeight * config.marginRatioY;
+  const int32_t radius = 4 * config.menuScale; // Corner radius grows with the menu icons (setMenuScale)
   uint16_t selectedItemColor;
   uint16_t lineLength;
 
-  canvas.fillRoundRect(rect_x + 1, rect_y - rect_height - clearMargin, rect_width - 3, rect_height - 3, 4, TFT_BLACK);
-  canvas.fillRoundRect(rect_x + 1, rect_y - 1, rect_width - 3, rect_height - 3, 4, TFT_BLACK);
-  canvas.fillRoundRect(rect_x + 1, rect_y + rect_height + clearMargin, rect_width - 3, rect_height - 3, 4, TFT_BLACK);
+  canvas.fillRoundRect(rect_x + 1, rect_y - rect_height - clearMargin, rect_width - 3, rect_height - 3, radius, TFT_BLACK);
+  canvas.fillRoundRect(rect_x + 1, rect_y - 1, rect_width - 3, rect_height - 3, radius, TFT_BLACK);
+  canvas.fillRoundRect(rect_x + 1, rect_y + rect_height + clearMargin, rect_width - 3, rect_height - 3, radius, TFT_BLACK);
 
   // Draw selection rectangle based on style and button state
   switch (config.menuStyle)
@@ -300,7 +373,7 @@ void Screen::drawSelectionRect()
   case 0:
     if (digitalRead(BUTTON_SELECT_PIN) == buttonVoltage && config.buttonAnimation)
     {
-      canvas.drawSmoothRoundRect(rect_x + 1, rect_y + 1, 4, 4,
+      canvas.drawSmoothRoundRect(rect_x + 1, rect_y + 1, radius, radius,
                                  rect_width - 2, rect_height - 1, config.selectionBorderColor, TFT_BLACK);
     }
     else
@@ -308,7 +381,7 @@ void Screen::drawSelectionRect()
       switch (config.scrollbar)
       {
       case false:
-        canvas.drawSmoothRoundRect(rect_x, rect_y, 4, 4, rect_width, rect_height, config.selectionBorderColor, TFT_BLACK);
+        canvas.drawSmoothRoundRect(rect_x, rect_y, radius, radius, rect_width, rect_height, config.selectionBorderColor, TFT_BLACK);
         lineLength = rect_height * 0.9f;
         canvas.drawFastVLine(tftWidth - 2, rect_y + tftHeight * 0.05f, lineLength, config.selectionBorderColor);
         canvas.drawFastVLine(tftWidth, rect_y + tftHeight * 0.05f, lineLength - 1, config.selectionBorderColor);
@@ -317,7 +390,7 @@ void Screen::drawSelectionRect()
         break;
 
       case true:
-        canvas.drawSmoothRoundRect(rect_x, rect_y, 4, 4, rect_width - 2, rect_height, config.selectionBorderColor, TFT_BLACK);
+        canvas.drawSmoothRoundRect(rect_x, rect_y, radius, radius, rect_width - 2, rect_height, config.selectionBorderColor, TFT_BLACK);
         lineLength = rect_height * 0.9f;
         canvas.drawFastVLine(rect_width - 4, rect_y + 2, lineLength, config.selectionBorderColor);
         canvas.drawFastVLine(rect_width - 3, rect_y + 2, lineLength - 1, config.selectionBorderColor);
@@ -330,13 +403,13 @@ void Screen::drawSelectionRect()
     break;
 
   case 1:
-    canvas.fillSmoothRoundRect(rect_x, rect_y, rect_width, rect_height, 4, config.selectionBorderColor, TFT_BLACK);
+    canvas.fillSmoothRoundRect(rect_x, rect_y, rect_width, rect_height, radius, config.selectionBorderColor, TFT_BLACK);
     config.selectedItemColor = TFT_BLACK;
     break;
 
   default:
     // Default case to handle any other menu styles that might be added in the future
-    canvas.drawSmoothRoundRect(rect_x, rect_y, 4, 4, rect_width, rect_height, config.selectionBorderColor, TFT_BLACK);
+    canvas.drawSmoothRoundRect(rect_x, rect_y, radius, radius, rect_width, rect_height, config.selectionBorderColor, TFT_BLACK);
     config.selectedItemColor = TFT_WHITE;
     break;
   }
@@ -391,8 +464,7 @@ void SettingsScreen::draw()
   if (textWidth > availableWidth)
   {
     // If the text doesn't fit, shorten it and add "..."
-    uint16_t maxLength = calculateMaxCharacters(previousItem.c_str(), availableWidth);
-    previousItem = previousItem.substring(0, maxLength - 3) + "...";
+    previousItem = ellipsize(previousItem, availableWidth);
   }
 
   canvas.setFreeFont(menuFont);
@@ -518,8 +590,7 @@ void SettingsScreen::draw()
     // If the text doesn't fit, truncate it and add "..."
     if (textWidth > availableWidth)
     {
-      uint16_t maxLength = calculateMaxCharacters(selectedItem.c_str(), availableWidth);
-      selectedItem = selectedItem.substring(0, maxLength - 3) + "...";
+      selectedItem = ellipsize(selectedItem, availableWidth);
     }
 
     // Print the adjusted text
@@ -669,8 +740,7 @@ void SettingsScreen::draw()
   // If the text doesn't fit, truncate it and add "..."
   if (textWidth > availableWidth)
   {
-    uint16_t maxLength = calculateMaxCharacters(nextItem.c_str(), availableWidth);
-    nextItem = nextItem.substring(0, maxLength - 3) + "...";
+    nextItem = ellipsize(nextItem, availableWidth);
   }
 
   // Print the adjusted text
@@ -1289,17 +1359,18 @@ MenuScreen::MenuScreen(const char *title)
   initializeDefaults();
 }
 // Add a menu item
-void MenuScreen::addItem(const char *label, Screen *nextScreen, ActionCallback action, const uint16_t *image)
+void MenuScreen::addItem(const char *label, Screen *nextScreen, ActionCallback action, const uint16_t *image, const uint8_t *alpha)
 {
   MenuItem item = {
       label,
       nextScreen,
       action,
-      image};
+      image,
+      alpha};
 
   items.push_back(item);
 }
-void MenuScreen::addItem(Screen *nextScreen, ActionCallback action, const uint16_t *image)
+void MenuScreen::addItem(Screen *nextScreen, ActionCallback action, const uint16_t *image, const uint8_t *alpha)
 {
   const char *screenTitle = nextScreen ? nextScreen->getTitle() : "Untitled Screen";
 
@@ -1307,7 +1378,8 @@ void MenuScreen::addItem(Screen *nextScreen, ActionCallback action, const uint16
       screenTitle,
       nextScreen,
       action,
-      image};
+      image,
+      alpha};
 
   items.push_back(item);
 }
@@ -1328,7 +1400,14 @@ void MenuScreen::draw()
 
   // Calculate adaptive positions for text and (optionally) icons
   float textMarginX = tftWidth * config.marginRatioX;
-  float iconSize = 16; // Icon size based on screen height
+  // Icons are drawn at 16 x menuScale px. Bitmaps smaller than that are scaled up by a whole factor.
+  const int32_t iconSource = config.menuIconSize; // Pixel size of the bitmaps (setMenuIconSize)
+  int32_t iconDrawScale = (16 * config.menuScale) / iconSource;
+  if (iconDrawScale < 1)
+  {
+    iconDrawScale = 1;
+  }
+  float iconSize = iconSource * iconDrawScale; // Size drawn on screen
 
   itemSize = items.size();
 
@@ -1370,8 +1449,7 @@ void MenuScreen::draw()
   if (textWidth > availableWidth)
   {
     // If the text doesn't fit, shorten it and add "..."
-    uint16_t maxLength = calculateMaxCharacters(previousItem.c_str(), availableWidth);
-    previousItem = previousItem.substring(0, maxLength - 3) + "...";
+    previousItem = ellipsize(previousItem, availableWidth);
   }
 
   // Set the cursor position for the previous item
@@ -1384,7 +1462,7 @@ void MenuScreen::draw()
   if (items[item_sel_previous].image != nullptr)
   {
     float iconPosY = ((tftHeight / itemNumber) - iconSize) / 2;
-    canvas.pushImage(textMarginX / 2, iconPosY, iconSize, iconSize, (uint16_t *)items[item_sel_previous].image); // Example position for the image
+    pushMenuIcon(textMarginX / 2, iconPosY, iconSource, items[item_sel_previous].image, items[item_sel_previous].alpha, iconDrawScale);
   }
 
   // --- Draw selected item ---
@@ -1415,8 +1493,7 @@ void MenuScreen::draw()
     if (textWidth > availableWidth)
     {
       // If the text doesn't fit, shorten it and add "..."
-      uint16_t maxLength = calculateMaxCharacters(previousItem.c_str(), availableWidth);
-      selectedItem = previousItem.substring(0, maxLength - 3) + "...";
+      selectedItem = ellipsize(selectedItem, availableWidth);
     }
 
     // Print the string
@@ -1427,7 +1504,7 @@ void MenuScreen::draw()
   if (items[item_selected].image != nullptr)
   {
     float iconPosY = (tftHeight - iconSize) / 2;
-    canvas.pushImage(textMarginX / 2, iconPosY, iconSize, iconSize, (uint16_t *)items[item_selected].image); // Example position for the image
+    pushMenuIcon(textMarginX / 2, iconPosY, iconSource, items[item_selected].image, items[item_selected].alpha, iconDrawScale);
   }
 
   // --- Draw next item ---
@@ -1445,8 +1522,7 @@ void MenuScreen::draw()
   if (textWidth > availableWidth)
   {
     // If the text doesn't fit, shorten it and add "..."
-    uint16_t maxLength = calculateMaxCharacters(nextItem.c_str(), availableWidth);
-    nextItem = nextItem.substring(0, maxLength - 3) + "...";
+    nextItem = ellipsize(nextItem, availableWidth);
   }
 
   // Set the cursor position for the next item
@@ -1459,7 +1535,7 @@ void MenuScreen::draw()
   if (items[item_sel_next].image != nullptr)
   {
     float iconPosY = tftHeight - ((tftHeight / itemNumber) + iconSize) / 2;
-    canvas.pushImage(textMarginX / 2, iconPosY, iconSize, iconSize, (uint16_t *)items[item_sel_next].image); // Example position for the image
+    pushMenuIcon(textMarginX / 2, iconPosY, iconSource, items[item_sel_next].image, items[item_sel_next].alpha, iconDrawScale);
   }
 
   // Draw the scrollbar if activated
@@ -2019,12 +2095,13 @@ void OpenMenuOS::navigateBack()
 // PopupManager Implementation
 //--------------------------------------------------------------------------
 
-// Popup styling constants
-constexpr uint16_t POPUP_MARGIN = 8;
-constexpr uint16_t POPUP_RADIUS = 6;
-constexpr uint16_t HEADER_HEIGHT_RATIO = 35; // percentage
-constexpr uint16_t BUTTON_HEIGHT = 28;
-constexpr uint16_t BUTTON_MARGIN = 6;
+// Popup styling. Sizes are for a 160x80 display and are multiplied by setMenuScale().
+constexpr uint16_t POPUP_MARGIN = 3;             ///< Space between the screen edge and the popup
+constexpr uint16_t POPUP_RADIUS = 5;             ///< Corner radius
+constexpr uint16_t HEADER_HEIGHT_RATIO = 30;     ///< Colored band, percentage of the popup height
+constexpr uint16_t POPUP_GAP = 2;                ///< Space below the band and around the hint line
+constexpr uint16_t POPUP_MESSAGE_COLOR = 0x4208; ///< Message text (dark gray)
+constexpr uint16_t POPUP_HINT_COLOR = 0x8410;    ///< Button hint (gray)
 constexpr uint32_t DEBOUNCE_TIME = 200;
 
 // Static member definitions
@@ -2035,17 +2112,19 @@ PopupConfig PopupManager::currentConfig;
 uint32_t PopupManager::lastButtonTime = 0;
 int PopupManager::selectedButton = 0;
 
+// The band colors match the background baked into each built-in icon, so the icons blend in.
+// Icons are 16-bit RGB565 data; their corner pixel's color is drawn as transparent.
 const PopupManager::PopupColors PopupManager::colorSchemes[] = {
     // INFO
-    {0x451F, TFT_WHITE, TFT_BLACK, 0x451F, TFT_WHITE, "Information", nullptr, 0, 0},
+    {0x453F, TFT_WHITE, TFT_BLACK, 0x453F, TFT_WHITE, "Information", (const uint16_t *)Info_icon, 6, 14},
     // SUCCESS
-    {0x07E0, TFT_WHITE, TFT_BLACK, 0x07E0, TFT_WHITE, "Success", nullptr, 0, 0},
+    {0x260F, TFT_WHITE, TFT_BLACK, 0x260F, TFT_WHITE, "Success", (const uint16_t *)Success_icon, 13, 10},
     // WARNING
-    {0xFD20, TFT_WHITE, TFT_BLACK, 0xFD20, TFT_WHITE, "Warning", nullptr, 0, 0},
+    {0xFAAB, TFT_WHITE, TFT_BLACK, 0xFAAB, TFT_WHITE, "Warning", (const uint16_t *)Warning_icon, 21, 18},
     // ERROR
-    {0xF800, TFT_WHITE, TFT_BLACK, 0xF800, TFT_WHITE, "Error", nullptr, 0, 0},
-    // QUESTION
-    {0x07FF, TFT_WHITE, TFT_BLACK, 0x07FF, TFT_WHITE, "Question", nullptr, 0, 0}};
+    {0xF800, TFT_WHITE, TFT_BLACK, 0xF800, TFT_WHITE, "Error", (const uint16_t *)Warning_icon, 21, 18},
+    // QUESTION (no bitmap: a "?" is drawn in the band)
+    {0x453F, TFT_WHITE, TFT_BLACK, 0x453F, TFT_WHITE, "Question", nullptr, 0, 0}};
 
 PopupResult PopupManager::show(const PopupConfig &config)
 {
@@ -2123,30 +2202,32 @@ PopupResult PopupManager::update()
     return PopupResult::OK;
   }
 
-  // Calculate popup dimensions
-  uint16_t popupWidth = tftWidth - (POPUP_MARGIN * 2);
-  uint16_t popupHeight = tftHeight - (POPUP_MARGIN * 2);
-  uint16_t popupX = POPUP_MARGIN;
-  uint16_t popupY = POPUP_MARGIN;
-
-  // Draw popup
+  // Layout: margin around the popup, colored band at the top, then title, message and hint
   const PopupColors &colors = colorSchemes[static_cast<int>(currentConfig.type)];
-  drawBackground(popupX, popupY, popupWidth, popupHeight);
+  const uint16_t margin = POPUP_MARGIN * menuConfig.menuScale;
+  const uint16_t popupX = margin;
+  const uint16_t popupY = margin;
+  const uint16_t popupWidth = tftWidth - margin * 2;
+  const uint16_t popupHeight = tftHeight - margin * 2;
+  const uint16_t headerHeight = (popupHeight * HEADER_HEIGHT_RATIO) / 100;
 
-  uint16_t headerHeight = (popupHeight * HEADER_HEIGHT_RATIO) / 100;
+  const uint8_t savedDatum = canvas.getTextDatum();
+  drawBackground(popupX, popupY, popupWidth, popupHeight);
   drawHeader(popupX, popupY, popupWidth, headerHeight, colors);
   drawContent(popupX, popupY + headerHeight, popupWidth, popupHeight - headerHeight, colors);
+  canvas.setTextDatum(savedDatum);
+  canvas.setTextSize(1);
 
   return currentResult;
 }
 
+// Lowest y the message may reach (set by drawContent, used by drawText)
+static int16_t popupTextBottom = 0;
+
 void PopupManager::drawBackground(uint16_t x, uint16_t y, uint16_t width, uint16_t height)
 {
-  // Create semi-transparent overlay effect by dimming the existing content
-  // Since TFT_eSPI doesn't have native alpha blending, we'll use a pattern-based approach
-  uint16_t overlayColor = 0x1082; // Dark semi-transparent looking color
-
-  // Draw overlay pattern to create semi-transparent effect
+  // Dim what's behind with a dot pattern (TFT_eSPI has no alpha fill)
+  const uint16_t overlayColor = 0x1082;
   for (int py = 0; py < tftHeight; py += 2)
   {
     for (int px = (py % 4); px < tftWidth; px += 4)
@@ -2155,108 +2236,139 @@ void PopupManager::drawBackground(uint16_t x, uint16_t y, uint16_t width, uint16
     }
   }
 
-  // Popup shadow
-  canvas.fillSmoothRoundRect(x + 3, y + 3, width, height, POPUP_RADIUS, 0x2104, TFT_TRANSPARENT);
-
-  // Main popup background
-  canvas.fillSmoothRoundRect(x, y, width, height, POPUP_RADIUS, TFT_WHITE, TFT_TRANSPARENT);
+  // Popup body
+  canvas.fillSmoothRoundRect(x, y, width, height, POPUP_RADIUS * menuConfig.menuScale, TFT_WHITE, TFT_TRANSPARENT);
 }
 
 void PopupManager::drawHeader(uint16_t x, uint16_t y, uint16_t width, uint16_t headerHeight, const PopupColors &colors)
 {
-  // Header background
-  canvas.fillSmoothRoundRect(x, y, width, headerHeight + POPUP_RADIUS, POPUP_RADIUS, colors.headerColor, TFT_WHITE);
-  canvas.fillRect(x, y + headerHeight - POPUP_RADIUS, width, POPUP_RADIUS, colors.headerColor);
+  const int16_t radius = POPUP_RADIUS * menuConfig.menuScale;
+  const uint16_t color = currentConfig.customColor ? currentConfig.customColor : colors.headerColor;
 
-  // Title text
-  const char *title = currentConfig.title ? currentConfig.title : colors.defaultTitle;
-  canvas.setFreeFont(menuFontBold);
-  canvas.setTextSize(1);
-  canvas.setTextColor(colors.buttonTextColor, colors.headerColor);
+  // Colored band with only its top corners rounded: draw it taller, then square off the bottom
+  canvas.fillSmoothRoundRect(x, y, width, headerHeight + radius, radius, color, TFT_WHITE);
+  canvas.fillRect(x, y + headerHeight, width, radius, TFT_WHITE);
 
-  uint16_t titleWidth = canvas.textWidth(title);
-  uint16_t titleX = x + (width - titleWidth) / 2;
-  uint16_t titleY = y + (headerHeight / 2) + (canvas.fontHeight() / 2);
-
-  canvas.setCursor(titleX, titleY);
-  canvas.print(title);
-
-  // Draw icon if available
-  drawIcon(x + 12, y + (headerHeight - 16) / 2, colors);
+  // Icon centered in the band
+  drawIcon(x + width / 2, y + headerHeight / 2, colors);
 }
 
 void PopupManager::drawContent(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const PopupColors &colors)
 {
-  if (!currentConfig.message)
-    return;
+  const int16_t gap = POPUP_GAP * menuConfig.menuScale;
+  const int16_t centerX = x + width / 2;
+  int16_t textBottom = y + height - gap;
 
-  uint16_t contentHeight = currentConfig.showButtons ? height - BUTTON_HEIGHT - BUTTON_MARGIN : height;
-  uint16_t messageY = y + 12;
-  uint16_t messageMaxWidth = width - 24;
-
-  drawText(currentConfig.message, x + 12, messageY, messageMaxWidth, colors.textColor);
-
+  // Bottom line: what the buttons do (nothing when the popup has no buttons)
   if (currentConfig.showButtons)
   {
-    drawButtons(x, y + contentHeight, width, BUTTON_HEIGHT, colors);
+    const int16_t hintHeight = 8 * menuConfig.menuScale; // Built-in font, scaled with the menu
+    const int16_t hintTop = y + height - gap - hintHeight;
+    drawButtons(x, hintTop, width, hintHeight, colors);
+    textBottom = hintTop - gap;
+  }
+
+  // Title, bold and black, below the band
+  const char *title = currentConfig.title ? currentConfig.title : colors.defaultTitle;
+  canvas.setFreeFont(menuFontBold);
+  canvas.setTextSize(1);
+  canvas.setTextColor(TFT_BLACK);
+  canvas.setTextDatum(TC_DATUM);
+  int16_t lineTop = y + gap;
+  canvas.drawString(title, centerX, lineTop);
+  lineTop += canvas.fontHeight();
+
+  // Message, centered and word-wrapped, as many lines as fit above the hint
+  if (currentConfig.message)
+  {
+    popupTextBottom = textBottom;
+    drawText(currentConfig.message, centerX, lineTop, width - 4 * gap, POPUP_MESSAGE_COLOR);
   }
 }
 
+// The hint line: which button does what. Select = OK/Yes, Up = Cancel/No (or turn the
+// encoder to choose, press to confirm: the chosen one is shown in the band color).
 void PopupManager::drawButtons(uint16_t x, uint16_t y, uint16_t width, uint16_t buttonHeight, const PopupColors &colors)
 {
-  uint16_t buttonWidth = currentConfig.showCancelButton ? (width - 36) / 2 : width - 24;
-  uint16_t okButtonX = currentConfig.showCancelButton ? x + 12 : x + (width - buttonWidth) / 2;
-  uint16_t cancelButtonX = x + width - buttonWidth - 12;
+  const bool question = currentConfig.type == PopupType::QUESTION;
+  const char *okLabel = question ? "Yes" : "OK";
+  const char *cancelLabel = question ? "No" : "Cancel";
+  const uint16_t accent = currentConfig.customColor ? currentConfig.customColor : colors.headerColor;
+  const int16_t centerX = x + width / 2;
 
-  // Determine button colors based on encoder selection (if encoder is enabled)
-  bool isOkSelected = !useEncoder || (selectedButton == 0);
-  bool isCancelSelected = useEncoder && (selectedButton == 1);
+  canvas.setFreeFont(nullptr); // Built-in font
+  canvas.setTextSize(menuConfig.menuScale);
+  canvas.setTextDatum(TC_DATUM);
 
-  // OK/Yes button
-  uint16_t okButtonColor = isOkSelected ? colors.buttonColor : 0x7BEF;
-  uint16_t okTextColor = isOkSelected ? colors.buttonTextColor : TFT_BLACK;
-
-  canvas.fillSmoothRoundRect(okButtonX, y + 6, buttonWidth, buttonHeight - 6, 4, okButtonColor, colors.backgroundColor);
-  canvas.setFreeFont(menuFont);
-  canvas.setTextColor(okTextColor, okButtonColor);
-
-  const char *okText = (currentConfig.type == PopupType::QUESTION) ? "Yes" : "OK";
-  uint16_t okTextWidth = canvas.textWidth(okText);
-  uint16_t okTextX = okButtonX + (buttonWidth - okTextWidth) / 2;
-  uint16_t okTextY = y + 6 + (buttonHeight / 2) + 3;
-
-  canvas.setCursor(okTextX, okTextY);
-  canvas.print(okText);
-
-  // Cancel/No button
-  if (currentConfig.showCancelButton)
+  if (!currentConfig.showCancelButton)
   {
-    uint16_t cancelButtonColor = isCancelSelected ? colors.buttonColor : 0x7BEF;
-    uint16_t cancelTextColor = isCancelSelected ? colors.buttonTextColor : TFT_BLACK;
-    canvas.fillSmoothRoundRect(cancelButtonX, y + 6, buttonWidth, buttonHeight - 6, 4, cancelButtonColor, colors.backgroundColor);
-    canvas.setTextColor(cancelTextColor, cancelButtonColor);
-
-    const char *cancelText = (currentConfig.type == PopupType::QUESTION) ? "No" : "Cancel";
-    uint16_t cancelTextWidth = canvas.textWidth(cancelText);
-    uint16_t cancelTextX = cancelButtonX + (buttonWidth - cancelTextWidth) / 2;
-
-    canvas.setCursor(cancelTextX, okTextY);
-    canvas.print(cancelText);
+    canvas.setTextColor(POPUP_HINT_COLOR);
+    canvas.drawString(question ? "OK: Yes" : "OK: close", centerX, y);
+    return;
   }
+
+  if (useEncoder)
+  {
+    const int16_t okWidth = canvas.textWidth(okLabel);
+    const int16_t cancelWidth = canvas.textWidth(cancelLabel);
+    const int16_t space = canvas.textWidth("    ");
+    const int16_t left = centerX - (okWidth + space + cancelWidth) / 2;
+    canvas.setTextDatum(TL_DATUM);
+    canvas.setTextColor(selectedButton == 0 ? accent : POPUP_HINT_COLOR);
+    canvas.drawString(okLabel, left, y);
+    canvas.setTextColor(selectedButton == 1 ? accent : POPUP_HINT_COLOR);
+    canvas.drawString(cancelLabel, left + okWidth + space, y);
+    return;
+  }
+
+  canvas.setTextColor(POPUP_HINT_COLOR);
+  canvas.drawString(String("OK: ") + okLabel + "   Up: " + cancelLabel, centerX, y);
 }
 
+// Draws the type's icon (or the popup's custom icon) centered on (x, y), scaled with
+// setMenuScale(). The icon's corner pixel is its background color and is left transparent.
 void PopupManager::drawIcon(uint16_t x, uint16_t y, const PopupColors &colors)
 {
-  if (currentConfig.customIcon)
+  const bool custom = currentConfig.customIcon != nullptr;
+  const uint16_t *data = custom ? currentConfig.customIcon : colors.defaultIcon;
+  const uint16_t w = custom ? currentConfig.customIconWidth : colors.iconWidth;
+  const uint16_t h = custom ? currentConfig.customIconHeight : colors.iconHeight;
+  const int16_t scale = menuConfig.menuScale;
+
+  if (data == nullptr || w == 0 || h == 0)
   {
-    canvas.pushImage(x, y, currentConfig.customIconWidth, currentConfig.customIconHeight, currentConfig.customIcon);
+    if (currentConfig.type == PopupType::QUESTION)
+    {
+      canvas.setFreeFont(menuFontBold);
+      canvas.setTextSize(1);
+      canvas.setTextColor(TFT_WHITE);
+      canvas.setTextDatum(MC_DATUM);
+      canvas.drawString("?", x, y);
+    }
+    return;
   }
-  else if (colors.defaultIcon)
+
+  // Read byte by byte: the built-in icons are byte arrays that may not be 16-bit aligned
+  const uint8_t *bytes = (const uint8_t *)data;
+  const uint16_t transparent = bytes[0] | (bytes[1] << 8);
+  const int16_t left = x - (w * scale) / 2;
+  const int16_t top = y - (h * scale) / 2;
+  for (uint16_t j = 0; j < h; j++)
   {
-    canvas.pushImage(x, y, colors.iconWidth, colors.iconHeight, colors.defaultIcon);
+    for (uint16_t i = 0; i < w; i++)
+    {
+      const uint32_t index = 2 * ((uint32_t)j * w + i);
+      const uint16_t color = bytes[index] | (bytes[index + 1] << 8);
+      if (color != transparent)
+      {
+        canvas.fillRect(left + i * scale, top + j * scale, scale, scale, color);
+      }
+    }
   }
 }
 
+// Draws `text` centered on x, word-wrapped to maxWidth, from y down to popupTextBottom.
+// A word longer than a line is cut. If the text doesn't all fit, the last line ends in "...".
 void PopupManager::drawText(const char *text, uint16_t x, uint16_t y, uint16_t maxWidth, uint16_t textColor, bool bold)
 {
   if (!text)
@@ -2264,51 +2376,59 @@ void PopupManager::drawText(const char *text, uint16_t x, uint16_t y, uint16_t m
 
   canvas.setFreeFont(bold ? menuFontBold : menuFont);
   canvas.setTextSize(1);
-  canvas.setTextColor(textColor, TFT_WHITE);
+  canvas.setTextColor(textColor);
+  canvas.setTextDatum(TC_DATUM);
 
-  // Simple word wrapping
-  String textStr = String(text);
-  uint16_t currentY = y;
-  uint16_t lineHeight = canvas.fontHeight() + 4;
-
+  const String textStr = String(text);
+  const int len = textStr.length();
+  const int16_t lineHeight = canvas.fontHeight();
+  int16_t lineTop = y;
   int start = 0;
-  while (start < textStr.length())
+
+  while (start < len && lineTop + lineHeight <= popupTextBottom)
   {
-    int end = textStr.length();
-
-    // Find the longest substring that fits
-    for (int i = start + 1; i <= textStr.length(); i++)
+    // Longest run of whole words that fits
+    int lineEnd = -1;
+    int searchFrom = start;
+    while (true)
     {
-      String substr = textStr.substring(start, i);
-      if (canvas.textWidth(substr.c_str()) > maxWidth)
-      {
-        end = i - 1;
+      int next = textStr.indexOf(' ', searchFrom);
+      if (next < 0)
+        next = len;
+      if (canvas.textWidth(textStr.substring(start, next)) > maxWidth)
         break;
-      }
+      lineEnd = next;
+      if (next >= len)
+        break;
+      searchFrom = next + 1;
     }
 
-    // Find last space to avoid breaking words
-    if (end < textStr.length())
+    // A single word wider than the line: cut it
+    if (lineEnd < 0)
     {
-      int lastSpace = textStr.lastIndexOf(' ', end);
-      if (lastSpace > start)
-      {
-        end = lastSpace;
-      }
+      lineEnd = start + 1;
+      while (lineEnd < len && canvas.textWidth(textStr.substring(start, lineEnd + 1)) <= maxWidth)
+        lineEnd++;
     }
 
-    String line = textStr.substring(start, end);
-    canvas.setCursor(x, currentY + canvas.fontHeight() - 2);
-    canvas.print(line);
+    String line = textStr.substring(start, lineEnd);
 
-    currentY += lineHeight;
-    start = end + 1;
-
-    // Skip leading spaces
-    while (start < textStr.length() && textStr.charAt(start) == ' ')
+    // Last line that fits, with text left over: end it with "..."
+    int next = lineEnd;
+    while (next < len && textStr.charAt(next) == ' ')
+      next++;
+    if (next < len && lineTop + 2 * lineHeight > popupTextBottom)
     {
-      start++;
+      line = textStr.substring(start);
+      while (line.length() > 0 && canvas.textWidth(line + "...") > maxWidth)
+        line.remove(line.length() - 1);
+      line.trim();
+      line += "...";
     }
+
+    canvas.drawString(line, x, lineTop);
+    lineTop += lineHeight;
+    start = next;
   }
 }
 
@@ -2560,31 +2680,32 @@ void Screen::drawScrollbar(int selectedItem, int nextItem, int numItem)
 
   // Use the current position for drawing (animated or immediate)
   int boxY = (int)currentScrollPosition;
+  const int barW = 3 * config.menuScale; // Scrollbar width, grows on larger displays (setMenuScale)
 
   if (config.scrollbarStyle == 0)
   {
     // Clear entire scrollbar area to prevent artifacts
-    canvas.fillRect(tftWidth - 3, 0, 3, tftHeight, TFT_BLACK);
+    canvas.fillRect(tftWidth - barW, 0, barW, tftHeight, TFT_BLACK);
 
     // Draw new scrollbar handle at the position
-    canvas.fillRect(tftWidth - 3, boxY, 3, boxHeight, config.scrollbarColor);
+    canvas.fillRect(tftWidth - barW, boxY, barW, boxHeight, config.scrollbarColor);
 
     for (int y = 0; y < tftHeight; y++)
     {
       // Display the Scrollbar
       if (y % 2 == 0)
       {
-        canvas.drawPixel(tftWidth - 2, y, TFT_WHITE);
+        canvas.drawPixel(tftWidth - barW / 2 - 1, y, TFT_WHITE);
       }
     }
   }
   else if (config.scrollbarStyle == 1)
   {
     // Clear previous scrollbar handle (entire area)
-    canvas.fillRect(tftWidth - 3, 0, 3, tftHeight, TFT_BLACK);
+    canvas.fillRect(tftWidth - barW, 0, barW, tftHeight, TFT_BLACK);
 
     // Draw new scrollbar handle at the position
-    canvas.fillSmoothRoundRect(tftWidth - 3, boxY, 3, boxHeight, 4, config.scrollbarColor, TFT_BLACK);
+    canvas.fillSmoothRoundRect(tftWidth - barW, boxY, barW, boxHeight, config.menuScale == 1 ? 4 : barW / 2, config.scrollbarColor, TFT_BLACK);
   }
 }
 
@@ -2787,62 +2908,32 @@ int Screen::calculateMaxCharacters(const char *text, uint16_t windowSize)
   if (text == nullptr || windowSize == 0)
     return 0;
 
-  int textLength = strlen(text);
+  const int textLength = strlen(text);
   if (textLength == 0)
     return 0;
 
   // Quick check: if full text fits, return early
   if (canvas.textWidth(text) <= windowSize)
-  {
     return textLength;
-  }
 
-  // Use binary search for efficient character counting
+  // Binary search for the longest prefix that fits
+  const String str(text);
   int left = 0;
   int right = textLength;
   int maxFit = 0;
-
-  // Create a small static buffer to avoid repeated allocations
-  static char tempBuffer[256];
-
   while (left <= right)
   {
-    int mid = (left + right) / 2;
-
-    // Safely copy substring using smaller buffer or dynamic allocation
-    if (mid + 1 <= sizeof(tempBuffer))
+    const int mid = (left + right) / 2;
+    if (canvas.textWidth(str.substring(0, mid)) <= windowSize)
     {
-      strncpy(tempBuffer, text, mid);
-      tempBuffer[mid] = '\0';
-
-      if (canvas.textWidth(tempBuffer) <= windowSize)
-      {
-        maxFit = mid;
-        left = mid + 1;
-      }
-      else
-      {
-        right = mid - 1;
-      }
+      maxFit = mid;
+      left = mid + 1;
     }
     else
     {
-      // For very long strings, fall back to linear search from current best fit
-      for (int i = maxFit; i < textLength; i++)
-      {
-        strncpy(tempBuffer, text, sizeof(tempBuffer) - 1);
-        tempBuffer[sizeof(tempBuffer) - 1] = '\0';
-
-        if (canvas.textWidth(tempBuffer) > windowSize)
-        {
-          return i - 1;
-        }
-        maxFit = i;
-      }
-      break;
+      right = mid - 1;
     }
   }
-
   return maxFit;
 }
 
@@ -2890,6 +2981,14 @@ void OpenMenuOS::setScrollbarColor(uint16_t color = TFT_WHITE)
 void OpenMenuOS::setScrollbarStyle(int style)
 {
   MenuScreen::config.scrollbarStyle = style;
+}
+void OpenMenuOS::setMenuScale(uint8_t scale)
+{
+  MenuScreen::config.menuScale = scale < 1 ? 1 : scale;
+}
+void OpenMenuOS::setMenuIconSize(uint8_t size)
+{
+  MenuScreen::config.menuIconSize = size < 1 ? 16 : size;
 }
 void OpenMenuOS::setSelectionBorderColor(uint16_t color = TFT_WHITE)
 {
@@ -3349,6 +3448,11 @@ void SettingsScreen::addBooleanSetting(const char *name, bool defaultValue)
   }
 
   Setting *s = new Setting(name, Setting::BOOLEAN);
+  s->defaultValue = defaultValue ? 1 : 0;
+
+  // Add it first, so saveToEEPROM() below includes it
+  settings.push_back(s);
+  totalSettings = settings.size();
 
   // Check if the setting already exists in EEPROM (for ESP32/ESP8266)
   if (!settingExists(s->id))
@@ -3361,9 +3465,6 @@ void SettingsScreen::addBooleanSetting(const char *name, bool defaultValue)
     // Read value from EEPROM to associate with the setting
     s->booleanValue = getBooleanFromEEPROM(s->id); // Add logic to retrieve the value from EEPROM
   }
-
-  settings.push_back(s);
-  totalSettings = settings.size();
 }
 
 void SettingsScreen::addRangeSetting(const char *name, uint8_t min, uint8_t max, uint8_t defaultValue, const char *unit = nullptr)
@@ -3384,6 +3485,11 @@ void SettingsScreen::addRangeSetting(const char *name, uint8_t min, uint8_t max,
   s->range.min = min;
   s->range.max = max;
   s->range.unit = unit;
+  s->defaultValue = defaultValue;
+
+  // Add it first, so saveToEEPROM() below includes it
+  settings.push_back(s);
+  totalSettings = settings.size();
 
   // Check if the setting already exists in EEPROM (for ESP32/ESP8266)
   if (!settingExists(s->id))
@@ -3396,9 +3502,6 @@ void SettingsScreen::addRangeSetting(const char *name, uint8_t min, uint8_t max,
     // Read value from EEPROM to associate with the setting
     s->rangeValue = getRangeFromEEPROM(s->id);
   }
-
-  settings.push_back(s);
-  totalSettings = settings.size();
 }
 
 void SettingsScreen::addOptionSetting(const char *name, const char **options, uint8_t count, uint8_t defaultIndex = 0)
@@ -3431,6 +3534,11 @@ void SettingsScreen::addOptionSetting(const char *name, const char **options, ui
   {
     defaultIndex = 0;
   }
+  s->defaultValue = defaultIndex;
+
+  // Add it first, so saveToEEPROM() below includes it
+  settings.push_back(s);
+  totalSettings = settings.size();
 
   // Check if the setting already exists in EEPROM (for ESP32/ESP8266)
   if (!settingExists(s->id))
@@ -3447,9 +3555,6 @@ void SettingsScreen::addOptionSetting(const char *name, const char **options, ui
       s->optionIndex = defaultIndex;
     }
   }
-
-  settings.push_back(s);
-  totalSettings = settings.size();
 }
 
 void SettingsScreen::addSubscreenSetting(const char *name, Screen *targetScreen)
@@ -3526,7 +3631,13 @@ bool SettingsScreen::settingExists(uint16_t settingId)
 
 void SettingsScreen::modify(int8_t direction, int index)
 {
-  Setting *s = settings[item_selected_settings];
+  // Support negative indexing (e.g. -1 is the last setting)
+  if (index < 0)
+    index = totalSettings + index;
+  if (index < 0 || index >= totalSettings)
+    return;
+
+  Setting *s = settings[index];
 
   if (s == nullptr || s->type == Setting::SUBSCREEN)
     return; // Skip empty settings and redirects
@@ -3719,7 +3830,7 @@ uint8_t SettingsScreen::getSettingValue(const char *name)
   // No matching setting found
   return 0;
 }
-Setting::Type SettingsScreen::getSettingType(uint8_t index)
+Setting::Type SettingsScreen::getSettingType(int index)
 {
   // Handle negative indices by wrapping around
   if (index < 0)
@@ -3772,7 +3883,7 @@ void SettingsScreen::resetSettings()
 #else
       EEPROM.write(s->id, 0); // Reset to 0 (false) in EEPROM
 #endif
-      s->booleanValue = false; // Reset the value in memory
+      s->booleanValue = s->defaultValue != 0; // Back to the value it was added with
       break;
 
     case Setting::RANGE:
@@ -3781,7 +3892,7 @@ void SettingsScreen::resetSettings()
 #else
       EEPROM.write(s->id, 0); // Reset to 0 in EEPROM
 #endif
-      s->rangeValue = s->range.min; // Reset to minimum value in memory
+      s->rangeValue = s->defaultValue; // Back to the value it was added with
       break;
 
     case Setting::OPTION:
@@ -3790,7 +3901,7 @@ void SettingsScreen::resetSettings()
 #else
       EEPROM.write(s->id, 0); // Reset to 0 in EEPROM
 #endif
-      s->optionIndex = 0; // Reset to first option in memory
+      s->optionIndex = s->defaultValue; // Back to the value it was added with
       break;
 
     default:

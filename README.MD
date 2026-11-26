@@ -1,5 +1,36 @@
 # OpenMenuOS Library Documentation
 
+## **What's New in v3.2.0?**
+
+### **Larger Displays**
+- **`setMenuScale(n)`** sizes the menu for larger screens (e.g. `setMenuScale(2)` on a 320x172 panel): menu icons are drawn at 16 x n px, and the selection corner radius, scrollbar width and popup margins scale with it. Default 1: unchanged.
+- **`setMenuIconSize(n)`** tells OpenMenuOS the size of your menu icon bitmaps (default 16). Icons are always drawn at 16 x menu scale px, so 32x32 icons with `setMenuScale(2)` are drawn as they are, and 16x16 ones are doubled (crisp, nearest-neighbour).
+- Fonts aren't scaled: give a larger display its own with `setMenuFont()` / `setMenuFontBold()`.
+
+### **Transparent Menu Icons**
+- `addItem()` takes an optional per-pixel **alpha map** (`const uint8_t *alpha`, 0-255) after the image, for smooth icon edges on any background. Without one, black is transparent as before.
+
+```cpp
+mainMenu.addItem("Settings", &settingsScreen, nullptr, (const uint16_t *)Menu_icon, Menu_icon_alpha);
+```
+
+### **Popup Redesign**
+- Popups bring back the original look: the type's **icon centered in a colored band** with only its top corners rounded, then the **title** and the **message** centered below.
+- The bottom line says what the buttons do (`OK: close`, `OK: Yes   Up: No`); with an encoder, the selected choice is shown in the band color. Button behaviour is unchanged.
+- Built-in icons for Info, Success, Warning and Error (warning icon on red); Question draws a "?". An icon's corner pixel color is drawn as transparent, custom icons included.
+- Messages are word-wrapped and centered; if the text doesn't fit, the last line ends with "...".
+- Sizes follow `setMenuScale()` and the menu fonts.
+
+### **Bug Fixes**
+- A long **selected** menu item was shortened using the **previous** item's text (with text scrolling off).
+- Text shortened with "..." could be left unshortened when fewer than 3 characters fit, and "..." is now measured instead of counted as 3 characters.
+- `calculateMaxCharacters()` gave wrong results for text longer than 255 characters.
+- Menu icons are read byte by byte, so `uint8_t` icon arrays that aren't 16-bit aligned can't crash the ESP32.
+- A newly added setting's default value was never saved (it was saved before being added to the list).
+- `modify(direction, index)` ignored `index` and changed the selected setting.
+- `getSettingType()` now takes an `int`, so negative indexes work as documented.
+- `resetSettings()` restores each setting's default value (it used to set false / the minimum / the first option).
+
 ## **What's New in v3.1.0 (2025/06/15)?**
 
 ### **New PopupManager System**
